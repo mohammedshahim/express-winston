@@ -1,0 +1,67 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Delete existing image from ECR if exists
+        run: |
+          aws ecr batch-delete-image --repository-name ${{ secrets.ECR_IMAGE_NAME }} --image-ids imageTag=latest
+
+      - name: Build and Push Docker Image
+        run: |
+          docker build -t ${{ secrets.ECR_IMAGE_NAME }} .
+          docker tag ${{ secrets.ECR_IMAGE_NAME }}:latest ${{ secrets.AWS_ECR_URL }}/${{ secrets.ECR_IMAGE_NAME }}:latest
+          docker push ${{ secrets.AWS_ECR_URL }}/${{ secrets.ECR_IMAGE_NAME }}:latest
+
+      - name: Deploy docker image in EC2
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ secrets.ECR_IMAGE_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_INSTANCE_IP }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          envs: |
+            export AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+            export AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            export AWS_DEFAULT_REGION=${{ secrets.AWS_REGION }}
+            export ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+            export ECR_REPOSITORY=${{ secrets.ECR_IMAGE_NAME }}
+            export IMAGE_TAG=${{ github.sha }}
+          script: |
+            sudo apt update
+            sudo apt install docker.io -y
+            sudo apt install awscli -y
+            sudo docker stop ${{ secrets.CONTAINER_NAME }} || true
+            sudo docker rm ${{ secrets.CONTAINER_NAME }} || true
+            aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
+            aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            aws configure set default.region ${{ secrets.AWS_REGION }}
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+            sudo docker pull ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_IMAGE_NAME }}:latest
+            sudo docker run -d --name ${{ secrets.CONTAINER_NAME }} -p 4000:4000 ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_IMAGE_NAME }}:latest
