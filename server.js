@@ -19,7 +19,8 @@ app.use(requestLogger);
 app.get("/", (req, res) => {
   try {
     return res.status(200).json({
-      message: "Hello World",
+      status: true,
+      message: "Server is running",
     });
   } catch (error) {
     logger.error(error.toString());
