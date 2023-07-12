@@ -16,6 +16,8 @@ module.exports = (data) => {
   };
 
   s3.upload(params, (err) => {
-    console.log("S3 Upload Error", err);
+    if (err) {
+      console.log("S3 Upload Error", err);
+    }
   });
 };
